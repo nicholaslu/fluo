@@ -1,13 +1,9 @@
 package io.github.nicholaslu.fluorite
 
-import android.content.Context
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresApi
@@ -23,6 +19,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import java.io.ByteArrayOutputStream
 import java.time.Duration
 import java.time.Instant
@@ -37,7 +35,9 @@ class MainActivity : RosActivity() {
     lateinit var imageCapture: ImageCapture
     lateinit var node: CompressedImageNode
     private val stream = ByteArrayOutputStream()
+    lateinit var jpegByteArray: ByteArray
     val frameRate = 24
+    private val scope = CoroutineScope(Dispatchers.IO)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -76,7 +76,7 @@ class MainActivity : RosActivity() {
                 supportedSizes.filter { it.width <= 1920 && it.height <= 1920}}
                     .build())
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            .setJpegQuality(30)
+            .setJpegQuality(40)
             .build()
 
         val cameraSelector = CameraSelector.Builder()
@@ -92,33 +92,51 @@ class MainActivity : RosActivity() {
         )
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun scheduleImageCapture() {
         val handler = Handler(Looper.getMainLooper())
         val timer = Timer()
-        val task = object : TimerTask() {
+        val captureTask = object : TimerTask() {
             override fun run() {
                 handler.post { takePicture() }
             }
         }
-        timer.schedule(task, 100, (1000/frameRate).toLong())
+//        val publishTask = object  : TimerTask() {
+//            @RequiresApi(Build.VERSION_CODES.O)
+//            override fun run() {
+//                publishMsg()
+//            }
+//        }
+//        val captureThread = Thread{
+//            while (true) {
+//                takePicture()
+//                Thread.sleep((500/frameRate).toLong())
+//            }
+//        }.start()
+//        val publishThread = Thread{
+//            while (true) {
+//                publishMsg()
+//                Thread.sleep((500/frameRate).toLong())
+//            }
+//        }.start()
+
+        timer.schedule(captureTask, 100, (1000/frameRate).toLong())
+//        timer.schedule(publishTask, 100, (1000/frameRate).toLong())
     }
 
     private fun takePicture() {
+        if (!::imageCapture.isInitialized)
+            return
         imageCapture.takePicture(ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageCapturedCallback() {
-            @RequiresApi(Build.VERSION_CODES.O)
             override fun onCaptureSuccess(image: ImageProxy) {
                 val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
+                jpegByteArray = ByteArray(buffer.remaining())
+                buffer.get(jpegByteArray)
+                publishMsg()
+//                buffer.get(bytes)
 //                saveImage(bytes)
                 image.close()
-                val msg = sensor_msgs.msg.CompressedImage()
-                msg.header.stamp = getStamp()
-                msg.header.frameId = "pixel"
-                msg.format = "jpg"
-                msg.data = bytes.asList()
-                node.publish_msg(msg)
-                stream.reset()
+//                stream.reset()
 //                Toast.makeText(this@MainActivity, "Msg sent", Toast.LENGTH_SHORT).show()
             }
 
@@ -126,6 +144,18 @@ class MainActivity : RosActivity() {
                 Toast.makeText(this@MainActivity, "Image capture failed: ${exception.message}", Toast.LENGTH_SHORT).show()
             }
         })
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun publishMsg() {
+        val msg = sensor_msgs.msg.CompressedImage()
+        msg.header.stamp = getStamp()
+        msg.header.frameId = "pixel"
+        msg.format = "jpg"
+        if (::jpegByteArray.isInitialized){
+            msg.data = jpegByteArray.asList()
+        }
+        node.publish_msg(msg)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
