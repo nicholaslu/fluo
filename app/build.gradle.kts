@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "io.github.nicholaslu.fluorite"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -38,8 +38,6 @@ android {
         jvmTarget = "1.8"
     }
 }
-
-//val cameraxVersion = "1.1.0"
 
 dependencies {
     implementation(libs.androidx.camera.core)

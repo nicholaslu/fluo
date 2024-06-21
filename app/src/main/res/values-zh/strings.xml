@@ -1,21 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">fluo</string>
-    <string name="lensButton_desc">Switch camera lens</string>
     <string name="lens_state_front">🔄</string>
     <string name="lens_state_back">🔄</string>
     <string name="lens_state_na">🔄</string>
-    <string name="fpsButton_desc">Switch FPS</string>
     <string name="fps_value_na">♾️</string>
-
-    <string name="text_to_use_namespace">Use namespace️</string>
+    <string name="text_to_use_namespace">使用命名空间</string>
     <string name="text_to_start">▶️</string>
     <string name="text_to_pause">⏸️</string>
-
-    <string name="format_not_selected">Select a format</string>
     <string name="format_jpeg">JPEG</string>
     <string name="format_png">PNG</string>
     <string name="format_webp">WebP</string>
-    <string name="format_webp_lossless">WebP Lossless</string>
-    <string name="resolution_not_selected">Select a resolution</string>
-    <string name="resSpinner_desc">Select camera resolution</string>
+    <string name="format_webp_lossless">无损WebP</string>
 </resources>

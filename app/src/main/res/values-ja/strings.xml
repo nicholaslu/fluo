@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">fluo</string>
+    <string name="lens_state_front">🔄</string>
+    <string name="lens_state_back">🔄</string>
+    <string name="lens_state_na">🔄</string>
+    <string name="fps_value_na">♾️</string>
+    <string name="text_to_use_namespace">名前空間を使用</string>
+    <string name="text_to_start">▶️</string>
+    <string name="text_to_pause">⏸️</string>
+    <string name="format_jpeg">ジェイペグ</string>
+    <string name="format_png">ピング</string>
+    <string name="format_webp">ウェッピー</string>
+    <string name="format_webp_lossless">ウェッピーロスレス</string>
+</resources>
