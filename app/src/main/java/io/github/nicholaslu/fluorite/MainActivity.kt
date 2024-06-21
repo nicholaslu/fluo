@@ -1,5 +1,7 @@
 package io.github.nicholaslu.fluorite
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -35,7 +37,7 @@ class MainActivity : RosActivity() {
     lateinit var imageCapture: ImageCapture
     lateinit var node: CompressedImageNode
     private val stream = ByteArrayOutputStream()
-    lateinit var jpegByteArray: ByteArray
+    lateinit var bytes: ByteArray
     val frameRate = 24
     private val scope = CoroutineScope(Dispatchers.IO)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,7 +78,7 @@ class MainActivity : RosActivity() {
                 supportedSizes.filter { it.width <= 1920 && it.height <= 1920}}
                     .build())
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            .setJpegQuality(40)
+            .setJpegQuality(90)
             .build()
 
         val cameraSelector = CameraSelector.Builder()
@@ -130,11 +132,10 @@ class MainActivity : RosActivity() {
         imageCapture.takePicture(ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 val buffer = image.planes[0].buffer
-                jpegByteArray = ByteArray(buffer.remaining())
-                buffer.get(jpegByteArray)
+                bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                decodeImage(bytes)
                 publishMsg()
-//                buffer.get(bytes)
-//                saveImage(bytes)
                 image.close()
 //                stream.reset()
 //                Toast.makeText(this@MainActivity, "Msg sent", Toast.LENGTH_SHORT).show()
@@ -151,21 +152,20 @@ class MainActivity : RosActivity() {
         val msg = sensor_msgs.msg.CompressedImage()
         msg.header.stamp = getStamp()
         msg.header.frameId = "pixel"
-        msg.format = "jpg"
-        if (::jpegByteArray.isInitialized){
-            msg.data = jpegByteArray.asList()
+        msg.format = "webp"
+        if (::bytes.isInitialized){
+//            msg.data = bytes.asList()
+            msg.data = stream.toByteArray().asList()
+            stream.reset()
         }
         node.publish_msg(msg)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
-    private fun saveImage(bytes: ByteArray) {
-//        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-//        try {
-//            bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 10, stream)
-//        } catch (e: IOException) {
-//            e.printStackTrace()
-//        }
+    private fun decodeImage(bytes: ByteArray) {
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val compressedBitmap = Bitmap.createScaledBitmap(bitmap,  bitmap.width/2, bitmap.height/2, false)
+        compressedBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, stream)
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
