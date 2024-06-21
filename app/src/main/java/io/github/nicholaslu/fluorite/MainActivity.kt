@@ -1,5 +1,6 @@
 package io.github.nicholaslu.fluorite
 
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
@@ -13,8 +14,9 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
-import android.widget.Switch
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.appcompat.widget.SwitchCompat
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -44,7 +46,6 @@ import java.util.concurrent.Executors
 
 
 class MainActivity : RosActivity() {
-    val TAG = "fluodebug"
     lateinit var formats: Array<String>
     var format = 0
     var publishing = false
@@ -100,7 +101,7 @@ class MainActivity : RosActivity() {
             formats
         )
         formatSpinner.adapter = formatArrayAdapter
-        formatSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener{
+        formatSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
                 parent: AdapterView<*>?,
                 view: View?,
@@ -117,7 +118,7 @@ class MainActivity : RosActivity() {
         }
 
         resSpinner = findViewById(R.id.resSpinner)
-        resSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener{
+        resSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
                 parent: AdapterView<*>?,
                 view: View?,
@@ -131,11 +132,13 @@ class MainActivity : RosActivity() {
                             selectedWidth = w.toInt()
                             selectedHeight = h.toInt()
                         }
+
                         frontCamera -> {
-                            val (w, h) = frontResolutions[position].split("x").map{it.toInt()}
+                            val (w, h) = frontResolutions[position].split("x").map { it.toInt() }
                             selectedWidth = w.toInt()
                             selectedHeight = h.toInt()
                         }
+
                         else -> {
                             Log.d(TAG, "Camera unknown")
                         }
@@ -151,8 +154,8 @@ class MainActivity : RosActivity() {
         }
 
         namespaceSwitch = findViewById(R.id.namespaceSwitch)
-        namespaceSwitch.setOnCheckedChangeListener{ _, useNamespace ->
-            if (useNamespace){
+        namespaceSwitch.setOnCheckedChangeListener { _, useNamespace ->
+            if (useNamespace) {
                 node.changeTopic("compressed", getDeviceName())
             } else {
                 node.changeTopic("compressed")
@@ -165,12 +168,22 @@ class MainActivity : RosActivity() {
             insets
         }
 
-        node = CompressedImageNode(getDeviceName()+"_camera")
-        initCamera()
+        node = CompressedImageNode(getDeviceName() + "_camera")
+
+        if (allPermissionsGranted()) {
+            initCamera()
+        } else {
+            requestPermissions.launch(REQUIRED_PERMISSIONS)
+        }
+
+        if (allPermissionsGranted()) {
+            initCamera()
+        }
     }
 
-    private fun getDeviceName() : String{
+    private fun getDeviceName(): String {
         return Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
+            .replace(Regex("[^a-zA-Z0-9_]"), "") ?: "android"
     }
 
     private fun onClickPlayButton() {
@@ -196,6 +209,7 @@ class MainActivity : RosActivity() {
                     resSpinner.setSelection(frontResolutions.indexOf(currentSelected))
                     restartCamera()
                 }
+
                 frontCamera -> {
                     lensButton.text = getText(R.string.lens_state_back)
                     camera = backCamera
@@ -204,6 +218,7 @@ class MainActivity : RosActivity() {
                     resSpinner.setSelection(backResolutions.indexOf(currentSelected))
                     restartCamera()
                 }
+
                 else -> {
                     Log.d(TAG, "Camera unknown")
                 }
@@ -214,7 +229,7 @@ class MainActivity : RosActivity() {
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
-    private fun getResolutionsByCameraInfo(cameraInfo: CameraInfo): Array<String>{
+    private fun getResolutionsByCameraInfo(cameraInfo: CameraInfo): Array<String> {
         val cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
         val cameraId = Camera2CameraInfo.from(cameraInfo).cameraId
         val characteristics = cameraManager.getCameraCharacteristics(cameraId)
@@ -231,7 +246,7 @@ class MainActivity : RosActivity() {
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
             cameraProvider.availableCameraInfos.forEach { cameraInfo ->
-                if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_FRONT){
+                if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_FRONT) {
                     frontResolutions = getResolutionsByCameraInfo(cameraInfo)
                     frontResolutionsArrayAdapter = ArrayAdapter(
                         this,
@@ -239,7 +254,7 @@ class MainActivity : RosActivity() {
                         frontResolutions
                     )
                     frontCamera = cameraInfo.cameraSelector
-                } else if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_BACK){
+                } else if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_BACK) {
                     backResolutions = getResolutionsByCameraInfo(cameraInfo)
                     backResolutionsArrayAdapter = ArrayAdapter(
                         this,
@@ -339,6 +354,24 @@ class MainActivity : RosActivity() {
         cameraExecutor.shutdown()
     }
 
+    private val requestPermissions =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            results.forEach { (permission, granted) ->
+                if (!granted) {
+                    Toast.makeText(
+                        this,
+                        "Permissions $permission not granted.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            finish()
+        }
+
+    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
+
     private inner class FrameAnalyzer : ImageAnalysis.Analyzer {
         private var baos = ByteArrayOutputStream()
         override fun analyze(image: ImageProxy) {
@@ -348,12 +381,15 @@ class MainActivity : RosActivity() {
                     0 -> {
                         node.publishCompressedImage(toJpegMsg(bitmap, 30))
                     }
+
                     1 -> {
                         node.publishCompressedImage(toPngMsg(bitmap, 30))
                     }
+
                     2 -> {
                         node.publishCompressedImage(toWebpMsg(bitmap, 30))
                     }
+
                     3 -> {
                         node.publishCompressedImage(toWebpLosslessMsg(bitmap, 30))
                     }
@@ -465,6 +501,15 @@ class MainActivity : RosActivity() {
             baos.reset()
             return msg
         }
+    }
+
+    companion object {
+        val REQUIRED_PERMISSIONS = arrayOf(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
+        )
+
+        const val TAG = "fluodebug"
     }
 }
 
