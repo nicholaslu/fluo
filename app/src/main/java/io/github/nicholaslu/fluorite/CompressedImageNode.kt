@@ -10,7 +10,7 @@ class CompressedImageNode(nodeName: String?) : BaseComposableNode(nodeName) {
         pub = this.node.createPublisher(sensor_msgs.msg.CompressedImage::class.java, topic)
     }
 
-    fun publish_msg(msg: sensor_msgs.msg.CompressedImage){
+    fun publishMsg(msg: sensor_msgs.msg.CompressedImage){
         pub.publish(msg)
     }
 }

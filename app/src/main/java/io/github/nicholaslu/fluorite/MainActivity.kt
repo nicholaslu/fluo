@@ -1,49 +1,56 @@
 package io.github.nicholaslu.fluorite
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.widget.Toast
+import android.util.Log
+import android.util.Range
+import android.util.Size
 import androidx.activity.enableEdgeToEdge
-import androidx.annotation.RequiresApi
+import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.DynamicRange
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.VideoCapture
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import sensor_msgs.msg.CompressedImage
 import java.io.ByteArrayOutputStream
 import java.time.Duration
 import java.time.Instant
-import java.util.Timer
-import java.util.TimerTask
-import java.util.concurrent.ExecutionException
+import java.time.temporal.TemporalAmount
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import kotlin.time.toKotlinDuration
 
 
 class MainActivity : RosActivity() {
     val TAG = "fluo"
     lateinit var previewView: PreviewView
     lateinit var imageCapture: ImageCapture
+    lateinit var videoCapture: VideoCapture<Recorder>
+    lateinit var cameraExecutor: ExecutorService
     lateinit var node: CompressedImageNode
-    private val stream = ByteArrayOutputStream()
-    lateinit var bytes: ByteArray
     val frameRate = 24
-    private val scope = CoroutineScope(Dispatchers.IO)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
+
+        cameraExecutor = Executors.newSingleThreadExecutor()
+
         previewView = findViewById(R.id.previewView)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -52,129 +59,175 @@ class MainActivity : RosActivity() {
         }
 
         startCamera()
-        node = CompressedImageNode("android_camera")
-//        executor.addNode(node)
-        scheduleImageCapture()
+        node = CompressedImageNode("pixel")
     }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
+            val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
+
+            val preview = Preview.Builder()
+                .build()
+                .also {
+                    it.setSurfaceProvider(findViewById<PreviewView>(R.id.previewView).surfaceProvider)
+                }
+
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            val recorder = Recorder.Builder()
+                .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
+                .build()
+
+//            videoCapture = VideoCapture.withOutput(recorder)
+            videoCapture = VideoCapture.Builder<Recorder>(recorder)
+                .build()
+
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionFilter { supportedSizes, rotationDegrees ->
+                            Log.d(TAG, "Supported resolution: $supportedSizes")
+                            supportedSizes.filter { it.width >= 1024 && it.height >= 768 }
+                        }.build()
+                )
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also {
+                    it.setAnalyzer(cameraExecutor, FrameAnalyzer())
+                }
+
             try {
-                val cameraProvider = cameraProviderFuture.get()
-                bindPreview(cameraProvider)
-            } catch (e: ExecutionException) {
-                // Handle any errors (including cancellation) here.
-            } catch (e: InterruptedException) {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, videoCapture, imageAnalysis
+                )
+            } catch (exc: Exception) {
+                Log.e(TAG, "Use case binding failed", exc)
             }
+
         }, ContextCompat.getMainExecutor(this))
     }
 
-    fun bindPreview(cameraProvider: ProcessCameraProvider) {
-        val preview = Preview.Builder()
-            .build()
-        imageCapture = ImageCapture.Builder()
-            .setResolutionSelector(ResolutionSelector.Builder().setResolutionFilter { supportedSizes, rotationDegrees ->
-                supportedSizes.filter { it.width <= 1920 && it.height <= 1920}}
-                    .build())
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            .setJpegQuality(90)
-            .build()
-
-        val cameraSelector = CameraSelector.Builder()
-            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-            .build()
-        preview.setSurfaceProvider(previewView.surfaceProvider)
-
-        cameraProvider.bindToLifecycle(
-            (this as LifecycleOwner),
-            cameraSelector,
-            preview,
-            imageCapture
-        )
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor.shutdown()
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun scheduleImageCapture() {
-        val handler = Handler(Looper.getMainLooper())
-        val timer = Timer()
-        val captureTask = object : TimerTask() {
-            override fun run() {
-                handler.post { takePicture() }
-            }
+    private inner class FrameAnalyzer : ImageAnalysis.Analyzer {
+        private var baos = ByteArrayOutputStream()
+        override fun analyze(image: ImageProxy) {
+            val bitmap = image.toBitmap()
+            node.publishMsg(toJpegMsg(bitmap, 30))
+            image.close()
         }
-//        val publishTask = object  : TimerTask() {
-//            @RequiresApi(Build.VERSION_CODES.O)
-//            override fun run() {
-//                publishMsg()
-//            }
-//        }
-//        val captureThread = Thread{
-//            while (true) {
-//                takePicture()
-//                Thread.sleep((500/frameRate).toLong())
-//            }
-//        }.start()
-//        val publishThread = Thread{
-//            while (true) {
-//                publishMsg()
-//                Thread.sleep((500/frameRate).toLong())
-//            }
-//        }.start()
 
-        timer.schedule(captureTask, 100, (1000/frameRate).toLong())
-//        timer.schedule(publishTask, 100, (1000/frameRate).toLong())
-    }
-
-    private fun takePicture() {
-        if (!::imageCapture.isInitialized)
-            return
-        imageCapture.takePicture(ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageCapturedCallback() {
-            override fun onCaptureSuccess(image: ImageProxy) {
-                val buffer = image.planes[0].buffer
-                bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                decodeImage(bytes)
-                publishMsg()
-                image.close()
-//                stream.reset()
-//                Toast.makeText(this@MainActivity, "Msg sent", Toast.LENGTH_SHORT).show()
+        private fun toPngMsg(bitmap: Bitmap, quality: Int, scale: Double = 1.0) : CompressedImage{
+            if (scale == 1.0){
+                bitmap.compress(Bitmap.CompressFormat.PNG, quality, baos)
+            } else if (scale > 1.0) {
+                val width = (bitmap.width / scale).toInt()
+                val height = (bitmap.height / scale).toInt()
+                val cBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
+                cBitmap.compress(Bitmap.CompressFormat.PNG, quality, baos)
+            } else {
+                Log.e(TAG, "scale should be larger than 1.0")
+                return CompressedImage()
             }
-
-            override fun onError(exception: ImageCaptureException) {
-                Toast.makeText(this@MainActivity, "Image capture failed: ${exception.message}", Toast.LENGTH_SHORT).show()
-            }
-        })
-    }
-
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun publishMsg() {
-        val msg = sensor_msgs.msg.CompressedImage()
-        msg.header.stamp = getStamp()
-        msg.header.frameId = "pixel"
-        msg.format = "webp"
-        if (::bytes.isInitialized){
-//            msg.data = bytes.asList()
-            msg.data = stream.toByteArray().asList()
-            stream.reset()
+            val msg = CompressedImage()
+            msg.header.frameId = "pixel"
+            msg.header.stamp = getStamp()
+            msg.format = "png"
+            msg.data = baos.toByteArray().asList()
+            baos.reset()
+            return msg
         }
-        node.publish_msg(msg)
-    }
 
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun decodeImage(bytes: ByteArray) {
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        val compressedBitmap = Bitmap.createScaledBitmap(bitmap,  bitmap.width/2, bitmap.height/2, false)
-        compressedBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, stream)
-    }
+        private fun toJpegMsg(bitmap: Bitmap, quality: Int, scale: Double = 1.0) : CompressedImage {
+            if (scale == 1.0){
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+            } else if (scale > 1.0) {
+                val width = (bitmap.width / scale).toInt()
+                val height = (bitmap.height / scale).toInt()
+                val cBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
+                cBitmap.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+            } else {
+                Log.e(TAG, "scale should be larger than 1.0")
+                return CompressedImage()
+            }
+            val msg = CompressedImage()
+            msg.header.frameId = "pixel"
+            msg.header.stamp = getStamp()
+            msg.format = "jpeg"
+            msg.data = baos.toByteArray().asList()
+            baos.reset()
+            return msg
+        }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    fun getStamp(delta: Long = 0): builtin_interfaces.msg.Time {
-        val instant: Instant = Instant.now() - Duration.ofMillis(delta)
-        val msg = builtin_interfaces.msg.Time()
-        msg.sec = instant.epochSecond.toInt()
-        msg.nanosec = instant.nano
-        return msg
-    }
+        private fun toWebpMsg(bitmap: Bitmap, quality: Int, scale: Double = 1.0) : CompressedImage{
+            if (scale == 1.0){
+                if(Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE){
+                    bitmap.compress(Bitmap.CompressFormat.WEBP, quality, baos)
+                } else {
+                    bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, quality, baos)
+                }
+            } else if (scale > 1.0) {
+                val width = (bitmap.width / scale).toInt()
+                val height = (bitmap.height / scale).toInt()
+                val cBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
+                if(Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE){
+                    cBitmap.compress(Bitmap.CompressFormat.WEBP, quality, baos)
+                } else {
+                    cBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, quality, baos)
+                }
+            } else {
+                Log.e(TAG, "scale should be larger than 1.0")
+                return CompressedImage()
+            }
+            val msg = CompressedImage()
+            msg.header.frameId = "pixel"
+            msg.header.stamp = getStamp()
+            msg.format = "webp"
+            msg.data = baos.toByteArray().asList()
+            baos.reset()
+            return msg
+        }
 
+        private fun toWebpLosslessMsg(bitmap: Bitmap, quality: Int, scale: Double = 1.0) : CompressedImage {
+            if (scale == 1.0){
+                if(Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE){
+                    bitmap.compress(Bitmap.CompressFormat.WEBP, 100, baos)
+                } else {
+                    bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, quality, baos)
+                }
+            } else if (scale > 1.0) {
+                val width = (bitmap.width / scale).toInt()
+                val height = (bitmap.height / scale).toInt()
+                val cBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
+                if(Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE){
+                    cBitmap.compress(Bitmap.CompressFormat.WEBP, 100, baos)
+                } else {
+                    cBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, quality, baos)
+                }
+            } else {
+                Log.e(TAG, "scale should be larger than 1.0")
+                return CompressedImage()
+            }
+            val msg = CompressedImage()
+            msg.header.frameId = "pixel"
+            msg.header.stamp = getStamp()
+            msg.format = "webp"
+            msg.data = baos.toByteArray().asList()
+            baos.reset()
+            return msg
+        }
+    }
+}
+
+fun getStamp(delta: Long = 0): builtin_interfaces.msg.Time {
+    val instant: Instant = Instant.now() - Duration.ofMillis(delta)
+    val msg = builtin_interfaces.msg.Time()
+    msg.sec = instant.epochSecond.toInt()
+    msg.nanosec = instant.nano
+    return msg
 }
