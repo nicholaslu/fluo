@@ -43,6 +43,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.min
 
 
 class MainActivity : RosActivity() {
@@ -128,15 +129,17 @@ class MainActivity : RosActivity() {
                 if (::camera.isInitialized) {
                     when (camera) {
                         backCamera -> {
-                            val (w, h) = backResolutions[position].split("x")
-                            selectedWidth = w.toInt()
-                            selectedHeight = h.toInt()
+                            val (w, h) = backResolutions[position].split("x").map { it.toInt() }
+                            selectedWidth = w
+                            selectedHeight = h
+                            Log.d(TAG, "Back camera set to resolution $w x $h")
                         }
 
                         frontCamera -> {
                             val (w, h) = frontResolutions[position].split("x").map { it.toInt() }
-                            selectedWidth = w.toInt()
-                            selectedHeight = h.toInt()
+                            selectedWidth = w
+                            selectedHeight = h
+                            Log.d(TAG, "Front camera set to resolution $w x $h")
                         }
 
                         else -> {
@@ -186,6 +189,28 @@ class MainActivity : RosActivity() {
             .replace(Regex("[^a-zA-Z0-9_]"), "") ?: "android"
     }
 
+    private fun getFrameId(): String{
+        if (::camera.isInitialized) {
+            when (camera) {
+                backCamera -> {
+                    return getDeviceName() + "/back"
+                }
+
+                frontCamera -> {
+                    return getDeviceName() + "/front"
+                }
+
+                else -> {
+                    Log.e(TAG, "Camera unknown")
+                    return getDeviceName()
+                }
+            }
+        } else {
+            Log.e(TAG, "Camera not initialized")
+            return getDeviceName()
+        }
+    }
+
     private fun onClickPlayButton() {
         if (publishing) {
             playButton.text = getString(R.string.text_to_start)
@@ -205,8 +230,17 @@ class MainActivity : RosActivity() {
                     lensButton.text = getText(R.string.lens_state_front)
                     camera = frontCamera
                     val currentSelected = resSpinner.selectedItem
+                    val currentIndex = backResolutions.indexOf(currentSelected)
                     resSpinner.adapter = frontResolutionsArrayAdapter
-                    resSpinner.setSelection(frontResolutions.indexOf(currentSelected))
+                    var index = frontResolutions.indexOf(currentSelected)
+                    if (index == -1){
+                        index = min(currentIndex, frontResolutions.size-1)
+                        Log.d(TAG, "no match resolution, fallback to index $index")
+                    }
+                    resSpinner.setSelection(index)
+                    val (w, h) = (resSpinner.selectedItem as String).split("x").map { it.toInt() }
+                    selectedWidth = w
+                    selectedHeight = h
                     restartCamera()
                 }
 
@@ -214,17 +248,26 @@ class MainActivity : RosActivity() {
                     lensButton.text = getText(R.string.lens_state_back)
                     camera = backCamera
                     val currentSelected = resSpinner.selectedItem
+                    val currentIndex = frontResolutions.indexOf(currentSelected)
                     resSpinner.adapter = backResolutionsArrayAdapter
-                    resSpinner.setSelection(backResolutions.indexOf(currentSelected))
+                    var index = backResolutions.indexOf(currentSelected)
+                    if (index == -1){
+                        index = min(currentIndex, backResolutions.size-1)
+                        Log.d(TAG, "no match resolution, fallback to index $index")
+                    }
+                    resSpinner.setSelection(index)
+                    val (w, h) = (resSpinner.selectedItem as String).split("x").map { it.toInt() }
+                    selectedWidth = w
+                    selectedHeight = h
                     restartCamera()
                 }
 
                 else -> {
-                    Log.d(TAG, "Camera unknown")
+                    Log.e(TAG, "Camera unknown")
                 }
             }
         } else {
-            Log.d(TAG, "Camera not initialized")
+            Log.e(TAG, "Camera not initialized")
         }
     }
 
@@ -277,7 +320,6 @@ class MainActivity : RosActivity() {
                 .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
                 .build()
 
-//            videoCapture = VideoCapture.withOutput(recorder)
             videoCapture = VideoCapture.Builder<Recorder>(recorder)
                 .build()
 
@@ -306,7 +348,6 @@ class MainActivity : RosActivity() {
     }
 
     private fun startCamera() {
-//        cameraProviderFuture.cancel(true)
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
             val preview = Preview.Builder()
@@ -319,7 +360,6 @@ class MainActivity : RosActivity() {
                 .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
                 .build()
 
-//            videoCapture = VideoCapture.withOutput(recorder)
             videoCapture = VideoCapture.Builder<Recorder>(recorder)
                 .build()
 
@@ -327,6 +367,7 @@ class MainActivity : RosActivity() {
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
                         .setResolutionFilter { supportedSizes, rotationDegrees ->
+                            Log.d(TAG, "Finding resolution that >= $selectedWidth x $selectedHeight")
                             Log.d(TAG, "Supported resolution: $supportedSizes")
                             supportedSizes.filter { it.width >= selectedWidth && it.height >= selectedHeight }
                         }.build()
@@ -411,7 +452,7 @@ class MainActivity : RosActivity() {
                 return CompressedImage()
             }
             val msg = CompressedImage()
-            msg.header.frameId = "pixel"
+            msg.header.frameId = getFrameId()
             msg.header.stamp = getStamp()
             msg.format = "png"
             msg.data = baos.toByteArray().asList()
@@ -432,7 +473,7 @@ class MainActivity : RosActivity() {
                 return CompressedImage()
             }
             val msg = CompressedImage()
-            msg.header.frameId = "pixel"
+            msg.header.frameId = getFrameId()
             msg.header.stamp = getStamp()
             msg.format = "jpeg"
             msg.data = baos.toByteArray().asList()
@@ -461,7 +502,7 @@ class MainActivity : RosActivity() {
                 return CompressedImage()
             }
             val msg = CompressedImage()
-            msg.header.frameId = "pixel"
+            msg.header.frameId = getFrameId()
             msg.header.stamp = getStamp()
             msg.format = "webp"
             msg.data = baos.toByteArray().asList()
@@ -494,7 +535,7 @@ class MainActivity : RosActivity() {
                 return CompressedImage()
             }
             val msg = CompressedImage()
-            msg.header.frameId = "pixel"
+            msg.header.frameId = getFrameId()
             msg.header.stamp = getStamp()
             msg.format = "webp"
             msg.data = baos.toByteArray().asList()
