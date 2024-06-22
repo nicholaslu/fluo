@@ -186,7 +186,7 @@ class MainActivity : RosActivity() {
 
     private fun getDeviceName(): String {
         return Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
-            .replace(Regex("[^a-zA-Z0-9_]"), "") ?: "android"
+            .replace(Regex("[^a-zA-Z0-9_]"), "")
     }
 
     private fun getFrameId(): String{
