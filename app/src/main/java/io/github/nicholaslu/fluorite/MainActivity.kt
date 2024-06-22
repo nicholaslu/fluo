@@ -279,8 +279,12 @@ class MainActivity : RosActivity() {
         val streamConfigurationMap =
             characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val outputSizes = streamConfigurationMap?.getOutputSizes(ImageFormat.YUV_420_888)
-        val resolutions = outputSizes?.map { size -> "${size.width}x${size.height}" }
-        return resolutions?.toTypedArray() ?: arrayOf()
+        val resolutions = outputSizes?.map { size -> "${size.width}x${size.height}" }?.toTypedArray()
+        resolutions?.sortWith(compareBy(
+            { it.split("x")[0].toInt() },
+            { it.split("x")[1].toInt() }
+        ))
+        return resolutions?: arrayOf()
     }
 
     private fun initCamera() {
