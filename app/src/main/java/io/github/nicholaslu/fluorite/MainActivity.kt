@@ -9,13 +9,16 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.util.Rational
+import android.util.Size
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
 import android.widget.Toast
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.appcompat.widget.SwitchCompat
@@ -26,7 +29,10 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -56,7 +62,6 @@ class MainActivity : RosActivity() {
     lateinit var formatSpinner: Spinner
     lateinit var resSpinner: Spinner
     lateinit var namespaceSwitch: SwitchCompat
-    lateinit var videoCapture: VideoCapture<Recorder>
     lateinit var cameraExecutor: ExecutorService
     lateinit var node: CompressedImageNode
     lateinit var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>
@@ -72,8 +77,13 @@ class MainActivity : RosActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+//        enableEdgeToEdge()
         setContentView(R.layout.activity_main)
+
+        window.decorView.windowInsetsController?.apply {
+            hide(WindowInsets.Type.systemBars())
+            systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -134,6 +144,7 @@ class MainActivity : RosActivity() {
                             val (w, h) = backResolutions[position].split("x").map { it.toInt() }
                             selectedWidth = w
                             selectedHeight = h
+                            restartCamera()
                             Log.d(TAG, "Back camera set to resolution $w x $h")
                         }
 
@@ -141,6 +152,7 @@ class MainActivity : RosActivity() {
                             val (w, h) = frontResolutions[position].split("x").map { it.toInt() }
                             selectedWidth = w
                             selectedHeight = h
+                            restartCamera()
                             Log.d(TAG, "Front camera set to resolution $w x $h")
                         }
 
@@ -191,7 +203,7 @@ class MainActivity : RosActivity() {
             .replace(Regex("[^a-zA-Z0-9_]"), "")
     }
 
-    private fun getFrameId(): String{
+    private fun getFrameId(): String {
         if (::camera.isInitialized) {
             when (camera) {
                 backCamera -> {
@@ -235,8 +247,8 @@ class MainActivity : RosActivity() {
                     val currentIndex = backResolutions.indexOf(currentSelected)
                     resSpinner.adapter = frontResolutionsArrayAdapter
                     var index = frontResolutions.indexOf(currentSelected)
-                    if (index == -1){
-                        index = min(currentIndex, frontResolutions.size-1)
+                    if (index == -1) {
+                        index = min(currentIndex, frontResolutions.size - 1)
                         Log.d(TAG, "no match resolution, fallback to index $index")
                     }
                     resSpinner.setSelection(index)
@@ -253,8 +265,8 @@ class MainActivity : RosActivity() {
                     val currentIndex = frontResolutions.indexOf(currentSelected)
                     resSpinner.adapter = backResolutionsArrayAdapter
                     var index = backResolutions.indexOf(currentSelected)
-                    if (index == -1){
-                        index = min(currentIndex, backResolutions.size-1)
+                    if (index == -1) {
+                        index = min(currentIndex, backResolutions.size - 1)
                         Log.d(TAG, "no match resolution, fallback to index $index")
                     }
                     resSpinner.setSelection(index)
@@ -281,70 +293,101 @@ class MainActivity : RosActivity() {
         val streamConfigurationMap =
             characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val outputSizes = streamConfigurationMap?.getOutputSizes(ImageFormat.YUV_420_888)
-        val resolutions = outputSizes?.map { size -> "${size.width}x${size.height}" }?.toTypedArray()
+        val resolutions =
+            outputSizes?.map { size -> "${size.width}x${size.height}" }?.toTypedArray()
         resolutions?.sortWith(compareBy(
             { it.split("x")[0].toInt() },
             { it.split("x")[1].toInt() }
         ))
-        return resolutions?: arrayOf()
+        return resolutions ?: arrayOf()
+    }
+
+    private fun initCameraByProvider(cameraProvider: ProcessCameraProvider){
+        cameraProvider.availableCameraInfos.forEach { cameraInfo ->
+            if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_FRONT) {
+                frontResolutions = getResolutionsByCameraInfo(cameraInfo)
+                frontResolutionsArrayAdapter = ArrayAdapter(
+                    this,
+                    R.layout.spinner_transparent,
+                    frontResolutions
+                ).apply {
+                    setDropDownViewResource(R.layout.spinner_transparent_dropdown)
+                }
+                frontCamera = cameraInfo.cameraSelector
+            } else if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_BACK) {
+                backResolutions = getResolutionsByCameraInfo(cameraInfo)
+                backResolutionsArrayAdapter = ArrayAdapter(
+                    this,
+                    R.layout.spinner_transparent,
+                    backResolutions
+                ).apply {
+                    setDropDownViewResource(R.layout.spinner_transparent_dropdown)
+                }
+                backCamera = cameraInfo.cameraSelector
+            }
+        }
+
+        // Use back camera by default
+        camera = backCamera
+        resSpinner.adapter = backResolutionsArrayAdapter
+    }
+
+    private fun startCameraByProvider(cameraProvider: ProcessCameraProvider){
+        val resSelector = ResolutionSelector.Builder()
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(selectedWidth, selectedHeight),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                )
+            )
+            .build()
+
+        val preview = Preview.Builder()
+            .setResolutionSelector(resSelector)
+            .build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+
+        val recorder = Recorder.Builder()
+            .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
+            .build()
+
+        val videoCapture = VideoCapture.Builder<Recorder>(recorder)
+            .setResolutionSelector(resSelector)
+            .build()
+
+        val imageAnalysis = ImageAnalysis.Builder()
+            .setResolutionSelector(resSelector)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+
+        val viewPort = ViewPort.Builder(
+            Rational(selectedHeight, selectedWidth),
+            preview.targetRotation
+        ).build()
+
+        val useCases = UseCaseGroup.Builder()
+            .setViewPort(viewPort)
+            .addUseCase(preview)
+            .addUseCase(imageAnalysis)
+            .addUseCase(videoCapture)
+            .build()
+
+        try {
+            cameraProvider.unbindAll()
+            cameraProvider.bindToLifecycle(
+                this, camera, useCases
+//                this, camera, preview, imageAnalysis, videoCapture
+            )
+        } catch (exc: Exception) {
+            Log.e(TAG, "Use case binding failed", exc)
+        }
     }
 
     private fun initCamera() {
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
-
-            cameraProvider.availableCameraInfos.forEach { cameraInfo ->
-                if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                    frontResolutions = getResolutionsByCameraInfo(cameraInfo)
-                    frontResolutionsArrayAdapter = ArrayAdapter(
-                        this,
-                        R.layout.spinner_transparent,
-                        frontResolutions
-                    ).apply {
-                        setDropDownViewResource(R.layout.spinner_transparent_dropdown)
-                    }
-                    frontCamera = cameraInfo.cameraSelector
-                } else if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_BACK) {
-                    backResolutions = getResolutionsByCameraInfo(cameraInfo)
-                    backResolutionsArrayAdapter = ArrayAdapter(
-                        this,
-                        R.layout.spinner_transparent,
-                        backResolutions
-                    ).apply {
-                        setDropDownViewResource(R.layout.spinner_transparent_dropdown)
-                    }
-                    backCamera = cameraInfo.cameraSelector
-                }
-            }
-            camera = backCamera
-            resSpinner.adapter = backResolutionsArrayAdapter
-
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(findViewById<PreviewView>(R.id.previewView).surfaceProvider)
-                }
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
-                .build()
-
-            videoCapture = VideoCapture.Builder<Recorder>(recorder)
-                .build()
-
-            val imageAnalysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, camera, preview, videoCapture, imageAnalysis
-                )
-            } catch (exc: Exception) {
-                Log.e(TAG, "Use case binding failed", exc)
-            }
-
+            initCameraByProvider(cameraProvider)
+            startCameraByProvider(cameraProvider)
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -360,43 +403,7 @@ class MainActivity : RosActivity() {
     private fun startCamera() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(findViewById<PreviewView>(R.id.previewView).surfaceProvider)
-                }
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
-                .build()
-
-            videoCapture = VideoCapture.Builder<Recorder>(recorder)
-                .build()
-
-            val imageAnalysis = ImageAnalysis.Builder()
-                .setResolutionSelector(
-                    ResolutionSelector.Builder()
-                        .setResolutionFilter { supportedSizes, rotationDegrees ->
-                            Log.d(TAG, "Finding resolution that >= $selectedWidth x $selectedHeight")
-                            Log.d(TAG, "Supported resolution: $supportedSizes")
-                            supportedSizes.filter { it.width >= selectedWidth && it.height >= selectedHeight }
-                        }.build()
-                )
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor, FrameAnalyzer())
-                }
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, camera, preview, videoCapture, imageAnalysis
-                )
-            } catch (exc: Exception) {
-                Log.e(TAG, "Use case binding failed", exc)
-            }
-
+            startCameraByProvider(cameraProvider)
         }, ContextCompat.getMainExecutor(this))
     }
 
