@@ -98,9 +98,11 @@ class MainActivity : RosActivity() {
         )
         val formatArrayAdapter = ArrayAdapter(
             this,
-            androidx.appcompat.R.layout.support_simple_spinner_dropdown_item,
+            R.layout.spinner_transparent,
             formats
-        )
+        ).apply {
+            setDropDownViewResource(R.layout.spinner_transparent_dropdown)
+        }
         formatSpinner.adapter = formatArrayAdapter
         formatSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
@@ -297,17 +299,21 @@ class MainActivity : RosActivity() {
                     frontResolutions = getResolutionsByCameraInfo(cameraInfo)
                     frontResolutionsArrayAdapter = ArrayAdapter(
                         this,
-                        androidx.appcompat.R.layout.support_simple_spinner_dropdown_item,
+                        R.layout.spinner_transparent,
                         frontResolutions
-                    )
+                    ).apply {
+                        setDropDownViewResource(R.layout.spinner_transparent_dropdown)
+                    }
                     frontCamera = cameraInfo.cameraSelector
                 } else if (cameraInfo.lensFacing == CameraSelector.LENS_FACING_BACK) {
                     backResolutions = getResolutionsByCameraInfo(cameraInfo)
                     backResolutionsArrayAdapter = ArrayAdapter(
                         this,
-                        androidx.appcompat.R.layout.support_simple_spinner_dropdown_item,
+                        R.layout.spinner_transparent,
                         backResolutions
-                    )
+                    ).apply {
+                        setDropDownViewResource(R.layout.spinner_transparent_dropdown)
+                    }
                     backCamera = cameraInfo.cameraSelector
                 }
             }
